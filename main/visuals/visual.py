@@ -9,11 +9,14 @@ import traceback
 import sys
 from main.logic.logic import ODELogic
 from main.visuals.visual_integrated import IntegratedVisualizations
+from main.visuals.visual_3d_plotly import Plotly3DModels as plotly_models
+
 class ODEVisualizer:
     def __init__(self, root, logic):
         self.root = root
         self.logic = logic
-        self.setup_ui()
+        self.plotly_models = plotly_models;
+        self.setup_ui()  # Здесь создается control_frame
 
         # Инициализируем интегрированные визуализации
         self.viz_manager = IntegratedVisualizations(self.logic, self.plot_frame)
@@ -21,25 +24,194 @@ class ODEVisualizer:
         # Настройка matplotlib
         plt.rcParams.update({'font.size': 10})
 
+        # Инициализируем 3D модели
+        from main.visuals.visual_3d_models import ThreeDModels
+        self.models_3d = ThreeDModels(logic.solver)
+
+        self.setup_3d_models_ui()
+
     def setup_ui(self):
         """Настройка пользовательского интерфейса"""
         self.root.title("Визуализация ОДУ второго порядка")
-        self.root.geometry("1400x900")  # Увеличил размер для визуализаций
+        self.root.geometry("1400x900")
 
         # Основной фрейм
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # Левая панель - управление
-        control_frame = ttk.LabelFrame(main_frame, text="Параметры уравнения", padding=10)
-        control_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        left_panel = ttk.Frame(main_frame)
+        left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+
+        # Фрейм для параметров уравнения (использует grid)
+        self.control_frame = ttk.LabelFrame(left_panel, text="Параметры уравнения", padding=10)
+        self.control_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Фрейм для 3D моделей (будет внизу левой панели)
+        self.models_frame_container = ttk.LabelFrame(left_panel, text="3D Модели", padding=10)
+        self.models_frame_container.pack(fill=tk.X, pady=(10, 0))
 
         # Правая панель - графики и визуализации
         self.plot_frame = ttk.LabelFrame(main_frame, text="Визуализации", padding=10)
         self.plot_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        self.setup_control_panel(control_frame)
-        self.setup_visualization_controls(control_frame)  # Новый метод для кнопок визуализаций
+        self.setup_control_panel(self.control_frame)
+        self.setup_visualization_controls(self.control_frame)
+        self.setup_3d_models_ui()
+
+    def setup_3d_models_ui(self):
+        """Добавление кнопок для 3D моделей"""
+        if not hasattr(self, 'models_frame_container'):
+            return
+
+        # Очищаем контейнер если там что-то есть
+        for widget in self.models_frame_container.winfo_children():
+            widget.destroy()
+
+        # Создаем кнопки
+        ttk.Button(self.models_frame_container, text="🎯 Маятник (3D)",
+                   command=self.show_pendulum_3d).pack(fill=tk.X, pady=2)
+
+        ttk.Button(self.models_frame_container, text="🔄 Двойной маятник",
+                   command=self.show_double_pendulum).pack(fill=tk.X, pady=2)
+
+        ttk.Button(self.models_frame_container, text="🔄 Пружинная система (3D)",
+                   command=self.show_spring_3d).pack(fill=tk.X, pady=2)
+
+
+    # В классе ODEVisualizer обновляем методы:
+    def show_pendulum_3d(self):
+        """Показ 3D маятника с Plotly"""
+        try:
+            # Параметры маятника
+            params = {
+                'L': 1.0,  # длина
+                'g': 9.81,  # ускорение
+                'beta': 0.1  # затухание
+            }
+
+            # Используем текущие начальные условия
+            initial_conditions = [self.y0.get(), self.yp0.get()]
+            t_range = (self.t_min.get(), self.t_max.get())
+
+            # Запускаем интерактивную визуализацию
+            success = self.plotly_models.create_interactive_pendulum(
+                params, initial_conditions, t_range
+            )
+
+            if not success:
+                # Fallback на matplotlib
+                self.models_3d.show_simple_pendulum(
+                    params, initial_conditions, t_range
+                )
+
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось создать визуализацию: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def show_double_pendulum(self):
+        """Показ двойного маятника с Plotly"""
+        try:
+            # Параметры
+            params = {
+                'L1': 1.0,
+                'L2': 0.8,
+                'm1': 1.0,
+                'm2': 1.0,
+                'g': 9.81
+            }
+
+            # Начальные условия
+            initial_conditions = [np.pi / 4, 0, np.pi / 2, 0]
+            t_range = (0, 20)
+
+            # Запускаем интерактивную визуализацию
+            success = self.plotly_models.create_double_pendulum_interactive(
+                params, initial_conditions, t_range
+            )
+
+            if not success:
+                # Fallback на matplotlib
+                self.models_3d.show_double_pendulum_simple()
+
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось создать визуализацию: {e}")
+
+    def show_spring_3d(self):
+        """Пружинная система с Plotly"""
+        if not self.logic.current_solution:
+            messagebox.showwarning("Предупреждение", "Сначала рассчитайте решение")
+            return
+
+        try:
+            # Параметры пружины
+            params = {'k': 1.0, 'm': 1.0}
+
+            # Используем Plotly
+            success = self.plotly_models.create_spring_system_interactive(
+                self.logic.current_solution, params
+            )
+
+            if not success:
+                # Fallback на matplotlib
+                fig, anim = self.models_3d.create_spring_system(self.logic.current_solution)
+                if fig:
+                    plt.show()
+
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось создать визуализацию: {e}")
+
+    def show_3d_phase_space(self):
+        """3D фазовое пространство с Plotly"""
+        if not self.logic.current_solution:
+            messagebox.showwarning("Предупреждение", "Сначала рассчитайте решение")
+            return
+
+        try:
+            # Используем Plotly
+            success = self.plotly_models.create_3d_phase_space_interactive(
+                self.logic.current_solution
+            )
+
+            if not success:
+                # Fallback на matplotlib
+                fig, _ = self.models_3d.create_3d_phase_space(self.logic.current_solution)
+                if fig:
+                    plt.show()
+
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось создать визуализацию: {e}")
+
+    # Обновляем кнопки:
+    def setup_3d_models_ui(self):
+        """Добавление кнопок для 3D моделей"""
+        if not hasattr(self, 'control_frame'):
+            return
+
+        models_frame = ttk.LabelFrame(self.control_frame, text="3D Модели (Plotly)", padding=10)
+        models_frame.grid(row=100, column=0, sticky=tk.W + tk.E, pady=10, padx=5)
+
+        ttk.Button(models_frame, text="🎯 Маятник (интерактивный 3D)",
+                   command=self.show_pendulum_3d).grid(row=0, column=0, sticky=tk.W + tk.E, pady=2)
+
+        ttk.Button(models_frame, text="🔄 Двойной маятник (3D)",
+                   command=self.show_double_pendulum).grid(row=1, column=0, sticky=tk.W + tk.E, pady=2)
+
+        ttk.Button(models_frame, text="🔄 Пружинная система (3D)",
+                   command=self.show_spring_3d).grid(row=2, column=0, sticky=tk.W + tk.E, pady=2)
+
+        ttk.Button(models_frame, text="🌐 3D Фазовое пространство",
+                   command=self.show_3d_phase_space).grid(row=3, column=0, sticky=tk.W + tk.E, pady=2)
+
+        # Добавляем информацию
+        info_label = ttk.Label(models_frame,
+                               text="Plotly создаст интерактивные 3D графики в браузере",
+                               font=('Arial', 8))
+        info_label.grid(row=4, column=0, sticky=tk.W + tk.E, pady=(10, 0))
+
+        models_frame.columnconfigure(0, weight=1)
+
 
     def setup_visualization_controls(self, parent):
         """Кнопки управления визуализациями"""
@@ -60,6 +232,23 @@ class ODEVisualizer:
 
         ttk.Button(viz_control_frame, text="❌ Очистить визуализации",
                    command=self.clear_visualizations).pack(fill=tk.X, pady=2)
+        models_frame = ttk.LabelFrame(parent, text="3D Модели", padding=10)
+        # Укажите большой номер строки, чтобы было внизу
+        models_frame.grid(row=100, column=0, sticky=tk.W + tk.E, pady=20, padx=5)
+
+        # Кнопки внутри models_frame
+        ttk.Button(models_frame, text="🎯 Маятник (3D)",
+                   command=self.show_pendulum_3d).grid(row=0, column=0, sticky=tk.W + tk.E, pady=2, padx=5)
+
+        ttk.Button(models_frame, text="🔄 Двойной маятник",
+                   command=self.show_double_pendulum).grid(row=1, column=0, sticky=tk.W + tk.E, pady=2, padx=5)
+
+        ttk.Button(models_frame, text="🔄 Пружинная система (3D)",
+                   command=self.show_spring_3d).grid(row=2, column=0, sticky=tk.W + tk.E, pady=2, padx=5)
+
+
+        # Настраиваем расширение столбца
+        models_frame.columnconfigure(0, weight=1)
 
     def show_basic_plots(self):
         """Показ основных графиков (решение + фазовый портрет)"""

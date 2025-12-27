@@ -1,11 +1,10 @@
 # visual_integrated.py
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import numpy as np
-from main.visuals.visual_physics import PhysicsVisualizer
-from main.visuals.visual_3d import ThreeDVisualizer
 import tkinter as tk
-from tkinter import ttk
+
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
 
 class IntegratedVisualizations:
     def __init__(self, logic, parent_frame):
