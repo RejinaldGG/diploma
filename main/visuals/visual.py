@@ -1,31 +1,495 @@
 # visual.py
+import sys
+import threading
+import tkinter as tk
+import traceback
+from datetime import datetime
+from tkinter import ttk, messagebox
+
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import tkinter as tk
-from tkinter import ttk, messagebox
-import threading
-import numpy as np
-import traceback
-import sys
-from main.logic.logic import ODELogic
+
+from main.db.storage_manager import StorageManager
 from main.visuals.visual_integrated import IntegratedVisualizations
+
+
 class ODEVisualizer:
     def __init__(self, root, logic):
         self.root = root
         self.logic = logic
+
+        try:
+            self.storage_manager = StorageManager()
+            print(f"StorageManager initialized. DB path: {self.storage_manager.storage.db_path}")
+        except Exception as e:
+            print(f"Error initializing StorageManager: {e}")
+            self.storage_manager = None
+
         self.setup_ui()
-
-        # Инициализируем интегрированные визуализации
         self.viz_manager = IntegratedVisualizations(self.logic, self.plot_frame)
-
-        # Настройка matplotlib
         plt.rcParams.update({'font.size': 10})
+
+    def setup_storage_ui(self, control_frame):
+        """Добавление UI для работы с хранилищем"""
+        storage_frame = ttk.LabelFrame(control_frame, text="Хранилище результатов", padding=10)
+        storage_frame.grid(row=110, column=0, sticky=tk.W + tk.E, pady=10, padx=5)
+
+        # Кнопки
+        ttk.Button(storage_frame, text="💾 Сохранить решение",
+                   command=self.save_current_solution).grid(row=0, column=0, sticky=tk.W + tk.E, pady=2)
+
+        ttk.Button(storage_frame, text="📂 История симуляций",
+                   command=self.show_simulation_history).grid(row=1, column=0, sticky=tk.W + tk.E, pady=2)
+
+        ttk.Button(storage_frame, text="🔍 Поиск",
+                   command=self.show_search_dialog).grid(row=2, column=0, sticky=tk.W + tk.E, pady=2)
+
+        ttk.Button(storage_frame, text="📊 Статистика",
+                   command=self.show_storage_stats).grid(row=3, column=0, sticky=tk.W + tk.E, pady=2)
+
+        ttk.Button(storage_frame, text="🔄 Импорт/Экспорт",
+                   command=self.show_import_export_dialog).grid(row=4, column=0, sticky=tk.W + tk.E, pady=2)
+
+        storage_frame.columnconfigure(0, weight=1)
+
+    def save_current_solution(self):
+        """Сохранение текущего решения"""
+        print("Save current solution called")
+
+        if not self.storage_manager:
+            messagebox.showerror("Ошибка", "Хранилище не инициализировано")
+            return
+
+        if not self.logic or not self.logic.current_solution:
+            messagebox.showwarning("Предупреждение", "Нет данных для сохранения")
+            return
+
+        # Диалог для ввода имени и тегов
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Сохранение симуляции")
+        dialog.geometry("400x300")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # Название
+        ttk.Label(dialog, text="Название:").pack(pady=(10, 5))
+        name_var = tk.StringVar(value=f"Simulation_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        name_entry = ttk.Entry(dialog, textvariable=name_var, width=40)
+        name_entry.pack(pady=5)
+        name_entry.focus_set()
+
+        # Теги
+        ttk.Label(dialog, text="Теги (через запятую):").pack(pady=(10, 5))
+        tags_var = tk.StringVar()
+        tags_entry = ttk.Entry(dialog, textvariable=tags_var, width=40)
+        tags_entry.pack(pady=5)
+
+        # Описание
+        ttk.Label(dialog, text="Описание:").pack(pady=(10, 5))
+        desc_text = tk.Text(dialog, height=4, width=40)
+        desc_text.pack(pady=5)
+
+        def save():
+            name = name_var.get().strip()
+            tags = [tag.strip() for tag in tags_var.get().split(',') if tag.strip()]
+            description = desc_text.get("1.0", tk.END).strip()
+
+            if not name:
+                messagebox.showerror("Ошибка", "Введите название симуляции")
+                return
+
+            print(f"Attempting to save: name={name}, tags={tags}")
+
+            # Сохраняем
+            sim_id = self.storage_manager.save_current_simulation(
+                self.logic, self, name, tags, description
+            )
+
+            if sim_id:
+                messagebox.showinfo("Успех", f"Симуляция сохранена (ID: {sim_id})")
+                dialog.destroy()
+            else:
+                messagebox.showerror("Ошибка", "Не удалось сохранить симуляцию")
+
+        # Кнопки
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(pady=10)
+
+        ttk.Button(button_frame, text="Сохранить", command=save).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Отмена", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+
+        # Бинд Enter для сохранения
+        dialog.bind('<Return>', lambda e: save())
+
+    def show_simulation_history(self):
+        """Показать историю симуляций"""
+        simulations = self.storage_manager.get_recent_simulations(limit=50)
+
+        if not simulations:
+            messagebox.showinfo("История", "Нет сохраненных симуляций")
+            return
+
+        # Создаем диалог с таблицей
+        dialog = tk.Toplevel(self.root)
+        dialog.title("История симуляций")
+        dialog.geometry("1200x900")
+
+        # Таблица
+        columns = ('ID', 'Название', 'Тип', 'Дата', 'Точек', 'Амплитуда', 'Теги')
+        tree = ttk.Treeview(dialog, columns=columns, show='headings', height=20)
+
+        # Заголовки
+        for col in columns:
+            tree.heading(col, text=col)
+            tree.column(col, width=100)
+
+        # Данные
+        for sim in simulations:
+            tags_str = ', '.join(sim.get('tags', []))[:30]
+            tree.insert('', tk.END, values=(
+                sim['id'],
+                sim['name'][:30],
+                sim.get('equation_type', ''),
+                sim['created_at'][:19],
+                sim.get('points_count', 0),
+                f"{sim.get('amplitude', 0):.4f}",
+                tags_str
+            ))
+
+        scrollbar = ttk.Scrollbar(dialog, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscroll=scrollbar.set)
+
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=10)
+
+        # Кнопки
+        button_frame = ttk.Frame(dialog)
+
+
+        ttk.Button(button_frame, text="Загрузить",
+                   command=lambda: self.load_selected_simulation(tree)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Удалить",
+                   command=lambda: self.delete_selected_simulation(tree)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Экспорт",
+                   command=lambda: self.export_selected_simulation(tree)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Закрыть",
+                   command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
+        button_frame.pack(fill=tk.X, padx=10, pady=10)
+
+    def load_selected_simulation(self, tree):
+        """Загрузка выбранной симуляции"""
+        selected = tree.selection()
+        if not selected:
+            return
+
+        item = tree.item(selected[0])
+        sim_id = item['values'][0]
+
+        sim_data = self.storage_manager.load_simulation_for_ui(str(sim_id))
+        if sim_data:
+            self._load_simulation_into_ui(sim_data)
+            messagebox.showinfo("Успех", f"Симуляция '{sim_data['metadata']['name']}' загружена")
+        else:
+            messagebox.showerror("Ошибка", "Не удалось загрузить симуляцию")
+
+    def _load_simulation_into_ui(self, sim_data):
+        """Загрузка симуляции в UI"""
+        metadata = sim_data['metadata']
+        results = sim_data['results']
+
+        # Устанавливаем тип уравнения
+        self.eq_type.set(metadata['equation_type'])
+        self.on_equation_change()
+
+        # Устанавливаем параметры
+        params = metadata['parameters']
+        eq_type = metadata['equation_type']
+
+        if eq_type == 'harmonic':
+            if 'omega' in params:
+                self.params['omega_harmonic'].set(params['omega'])
+        elif eq_type == 'damped':
+            if 'omega' in params:
+                self.params['omega_damped'].set(params['omega'])
+            if 'beta' in params:
+                self.params['beta_damped'].set(params['beta'])
+        elif eq_type == 'forced':
+            if 'omega' in params:
+                self.params['omega_forced'].set(params['omega'])
+            if 'beta' in params:
+                self.params['beta_forced'].set(params['beta'])
+            if 'force' in params:
+                self.params['force_forced'].set(params['force'])
+            if 'frequency' in params:
+                self.params['freq_forced'].set(params['frequency'])
+        elif eq_type == 'custom':
+            if 'equation' in params:
+                self.custom_equation.set(params['equation'])
+
+        # Начальные условия
+        if metadata['initial_conditions'] and len(metadata['initial_conditions']) >= 2:
+            self.y0.set(metadata['initial_conditions'][0])
+            self.yp0.set(metadata['initial_conditions'][1])
+
+        # Диапазон времени
+        if metadata['t_range'] and len(metadata['t_range']) >= 2:
+            self.t_min.set(metadata['t_range'][0])
+            self.t_max.set(metadata['t_range'][1])
+
+        # Устанавливаем решение
+        self.logic.current_solution = results
+
+        # Обновляем графики
+        self.plot_solution(results)
+        self.show_analysis()
+
+    def show_storage_stats(self):
+        """Показать статистику хранилища"""
+        try:
+            stats = self.storage_manager.get_statistics()
+
+            if not stats:
+                messagebox.showinfo("Статистика", "Нет данных о хранилище")
+                return
+
+            # Форматируем статистику
+            stats_text = f"""
+    📊 СТАТИСТИКА ХРАНИЛИЩА
+
+    📁 Общая информация:
+    • Всего симуляций: {stats.get('total_simulations', 0)}
+    • Последний ID: {stats.get('last_id', 0)}
+    • Создано: {stats.get('created_at', 'N/A')}
+    • Обновлено: {stats.get('updated_at', 'N/A')}
+    • Файл БД: {stats.get('db_path', 'N/A')}
+    • Файл существует: {'✅ ДА' if stats.get('file_exists') else '❌ НЕТ'}
+
+    📈 Распределение по типам уравнений:
+    """
+
+            # Типы уравнений
+            eq_types = stats.get('equation_types', {})
+            if eq_types:
+                for eq_type, count in eq_types.items():
+                    stats_text += f"  • {eq_type}: {count} симуляций\n"
+            else:
+                stats_text += "  • Нет данных\n"
+
+            # Дополнительная информация
+            stats_text += f"\n💾 Размер в байтах: {stats.get('file_size_bytes', 0)}"
+            stats_text += f"\n📏 Размер в MB: {stats.get('file_size_mb', 0):.2f}"
+
+            messagebox.showinfo("Статистика хранилища", stats_text)
+
+            # Также выводим в консоль для отладки
+            print("\n📊 СТАТИСТИКА ХРАНИЛИЩА:")
+            print(f"   Всего симуляций: {stats.get('total_simulations', 0)}")
+            print(f"   Размер файла: {stats.get('db_file_size', '0 B')}")
+            print(f"   Сжатие: {stats.get('compression_ratio', '0%')}")
+
+        except Exception as e:
+            print(f"❌ Ошибка при получении статистики: {e}")
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("Ошибка", f"Не удалось получить статистику: {e}")
+
+    def show_search_dialog(self):
+        """Диалог поиска симуляций"""
+        if not self.storage_manager:
+            messagebox.showwarning("Предупреждение", "Хранилище недоступно")
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Поиск симуляций")
+        dialog.geometry("500x400")
+
+        # Поля для поиска
+        ttk.Label(dialog, text="Тип уравнения:").pack(pady=(10, 5))
+        eq_type_var = tk.StringVar(value="")
+        eq_types = ["", "harmonic", "damped", "forced", "custom", "pendulum"]
+        eq_combo = ttk.Combobox(dialog, textvariable=eq_type_var, values=eq_types, state="readonly")
+        eq_combo.pack(pady=5)
+
+        ttk.Label(dialog, text="Название содержит:").pack(pady=(10, 5))
+        name_var = tk.StringVar()
+        ttk.Entry(dialog, textvariable=name_var, width=40).pack(pady=5)
+
+        ttk.Label(dialog, text="Теги (через запятую):").pack(pady=(10, 5))
+        tags_var = tk.StringVar()
+        ttk.Entry(dialog, textvariable=tags_var, width=40).pack(pady=5)
+
+        ttk.Label(dialog, text="Минимальная амплитуда:").pack(pady=(10, 5))
+        amp_var = tk.DoubleVar(value=0.0)
+        ttk.Entry(dialog, textvariable=amp_var, width=20).pack(pady=5)
+
+        # Результаты поиска
+        result_frame = ttk.LabelFrame(dialog, text="Результаты", padding=10)
+        result_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        result_listbox = tk.Listbox(result_frame, height=8)
+        result_scrollbar = ttk.Scrollbar(result_frame, orient=tk.VERTICAL, command=result_listbox.yview)
+        result_listbox.configure(yscrollcommand=result_scrollbar.set)
+
+        result_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        result_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def perform_search():
+            """Выполнить поиск"""
+            result_listbox.delete(0, tk.END)
+
+            eq_type = eq_type_var.get()
+            if eq_type == "":
+                eq_type = None
+
+            name_text = name_var.get().strip()
+            if not name_text:
+                name_text = None
+
+            tags_text = tags_var.get().strip()
+            tags = [tag.strip() for tag in tags_text.split(',') if tag.strip()] if tags_text else None
+
+            min_amp = amp_var.get()
+            if min_amp <= 0:
+                min_amp = None
+
+            # Выполняем поиск
+            results = self.storage_manager.search_simulations(
+                equation_type=eq_type,
+                search_text=name_text,
+                tags=tags
+            )
+
+            # Фильтруем по амплитуде
+            if min_amp is not None:
+                results = [r for r in results if r.get('amplitude', 0) >= min_amp]
+
+            # Отображаем результаты
+            if not results:
+                result_listbox.insert(tk.END, "Ничего не найдено")
+                return
+
+            for sim in results:
+                display_text = f"{sim['id']}: {sim['name']} ({sim['equation_type']}) - A={sim.get('amplitude', 0):.3f}"
+                result_listbox.insert(tk.END, display_text)
+                result_listbox.selection_data[result_listbox.size() - 1] = sim['id']
+
+        def load_selected():
+            """Загрузить выбранную симуляцию"""
+            selection = result_listbox.curselection()
+            if not selection:
+                return
+
+            # Получаем ID из скрытых данных
+            index = selection[0]
+            try:
+                sim_id = result_listbox.selection_data.get(index)
+                if sim_id:
+                    sim_data = self.storage_manager.load_simulation_for_ui(str(sim_id))
+                    if sim_data:
+                        self._load_simulation_into_ui(sim_data)
+                        dialog.destroy()
+                        messagebox.showinfo("Успех", "Симуляция загружена")
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось загрузить: {e}")
+
+        # Создаем скрытое хранилище для ID
+        result_listbox.selection_data = {}
+
+        # Кнопки
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(pady=10)
+
+        ttk.Button(button_frame, text="🔍 Поиск", command=perform_search).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="📥 Загрузить", command=load_selected).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="❌ Закрыть", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+
+    def show_import_export_dialog(self):
+        """Диалог импорта/экспорта"""
+        if not self.storage_manager:
+            messagebox.showwarning("Предупреждение", "Хранилище недоступно")
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Импорт/Экспорт")
+        dialog.geometry("400x300")
+
+        notebook = ttk.Notebook(dialog)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Вкладка экспорта
+        export_frame = ttk.Frame(notebook)
+        notebook.add(export_frame, text="Экспорт")
+
+        ttk.Label(export_frame, text="ID симуляции для экспорта:").pack(pady=(20, 5))
+        export_id_var = tk.StringVar()
+        ttk.Entry(export_frame, textvariable=export_id_var, width=30).pack(pady=5)
+
+        ttk.Label(export_frame, text="Путь для сохранения:").pack(pady=(10, 5))
+        export_path_var = tk.StringVar(value="simulation_export.json")
+        ttk.Entry(export_frame, textvariable=export_path_var, width=30).pack(pady=5)
+
+        def export_simulation():
+            """Экспортировать симуляцию"""
+            sim_id = export_id_var.get().strip()
+            export_path = export_path_var.get().strip()
+
+            if not sim_id or not export_path:
+                messagebox.showerror("Ошибка", "Заполните все поля")
+                return
+
+            success = self.storage_manager.export_to_file(sim_id, export_path)
+            if success:
+                messagebox.showinfo("Успех", f"Симуляция экспортирована в {export_path}")
+            else:
+                messagebox.showerror("Ошибка", "Не удалось экспортировать симуляцию")
+
+        ttk.Button(export_frame, text="📤 Экспорт", command=export_simulation).pack(pady=20)
+
+        # Вкладка импорта
+        import_frame = ttk.Frame(notebook)
+        notebook.add(import_frame, text="Импорт")
+
+        ttk.Label(import_frame, text="Путь к файлу для импорта:").pack(pady=(20, 5))
+        import_path_var = tk.StringVar()
+        ttk.Entry(import_frame, textvariable=import_path_var, width=30).pack(pady=5)
+
+        def browse_file():
+            """Выбрать файл"""
+            from tkinter import filedialog
+            filename = filedialog.askopenfilename(
+                title="Выберите файл симуляции",
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+            )
+            if filename:
+                import_path_var.set(filename)
+
+        ttk.Button(import_frame, text="📁 Обзор", command=browse_file).pack(pady=5)
+
+        def import_simulation():
+            """Импортировать симуляцию"""
+            import_path = import_path_var.get().strip()
+
+            if not import_path:
+                messagebox.showerror("Ошибка", "Укажите путь к файлу")
+                return
+
+            sim_id = self.storage_manager.import_from_file(import_path)
+            if sim_id:
+                messagebox.showinfo("Успех", f"Симуляция импортирована (ID: {sim_id})")
+                dialog.destroy()
+            else:
+                messagebox.showerror("Ошибка", "Не удалось импортировать симуляцию")
+
+        ttk.Button(import_frame, text="📥 Импорт", command=import_simulation).pack(pady=20)
+
+        # Кнопка закрытия
+        ttk.Button(dialog, text="Закрыть", command=dialog.destroy).pack(pady=10)
 
     def setup_ui(self):
         """Настройка пользовательского интерфейса"""
         self.root.title("Визуализация ОДУ второго порядка")
-        self.root.geometry("1400x900")  # Увеличил размер для визуализаций
-
+        self.root.geometry("1400x900")
+        self.root.state('zoomed')
         # Основной фрейм
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -34,12 +498,12 @@ class ODEVisualizer:
         control_frame = ttk.LabelFrame(main_frame, text="Параметры уравнения", padding=10)
         control_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
 
-        # Правая панель - графики и визуализации
         self.plot_frame = ttk.LabelFrame(main_frame, text="Визуализации", padding=10)
         self.plot_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
         self.setup_control_panel(control_frame)
-        self.setup_visualization_controls(control_frame)  # Новый метод для кнопок визуализаций
+        self.setup_visualization_controls(control_frame)
+        self.setup_storage_ui(control_frame)
 
     def setup_visualization_controls(self, parent):
         """Кнопки управления визуализациями"""
@@ -299,6 +763,288 @@ class ODEVisualizer:
         ttk.Entry(self.custom_frame, textvariable=self.custom_equation, width=30).grid(row=1, column=0, columnspan=2)
 
         self.show_equation_params()
+
+    def delete_selected_simulation(self, tree):
+        """Удаление выбранной симуляции"""
+        selected = tree.selection()
+        if not selected:
+            messagebox.showwarning("Предупреждение", "Выберите симуляцию для удаления")
+            return
+
+        item = tree.item(selected[0])
+        sim_id = item['values'][0]
+        sim_name = item['values'][1]
+
+        # Подтверждение
+        if not messagebox.askyesno("Подтверждение",
+                                   f"Удалить симуляцию '{sim_name}' (ID: {sim_id})?\n"
+                                   "Это действие нельзя отменить."):
+            return
+
+        # Удаление
+        if self.storage_manager and self.storage_manager.delete_simulation(str(sim_id)):
+            tree.delete(selected[0])
+            messagebox.showinfo("Успех", "Симуляция удалена")
+        else:
+            messagebox.showerror("Ошибка", "Не удалось удалить симуляцию")
+
+    def export_selected_simulation(self, tree):
+        """Экспорт выбранной симуляции в файл"""
+        selected = tree.selection()
+        if not selected:
+            messagebox.showwarning("Предупреждение", "Выберите симуляцию для экспорта")
+            return
+
+        item = tree.item(selected[0])
+        sim_id = item['values'][0]
+        sim_name = item['values'][1]
+
+        # Диалог выбора файла
+        from tkinter import filedialog
+        default_filename = f"simulation_{sim_id}_{sim_name.replace(' ', '_')}.json"
+
+        filepath = filedialog.asksaveasfilename(
+            title="Экспорт симуляции",
+            defaultextension=".json",
+            initialfile=default_filename,
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+        )
+
+        if not filepath:
+            return  # Пользователь отменил
+
+        try:
+            # Экспорт
+            success = self.storage_manager.export_to_file(str(sim_id), filepath)
+
+            if success:
+                messagebox.showinfo("Успех", f"Симуляция экспортирована в:\n{filepath}")
+            else:
+                messagebox.showerror("Ошибка", "Не удалось экспортировать симуляцию")
+
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка экспорта: {str(e)}")
+
+    def show_search_dialog(self):
+        """Диалог поиска симуляций (упрощенная версия)"""
+        if not self.storage_manager:
+            messagebox.showwarning("Предупреждение", "Хранилище недоступно")
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Поиск симуляций")
+        dialog.geometry("500x400")
+
+        # Простой поиск по имени
+        ttk.Label(dialog, text="Поиск по имени:").pack(pady=(20, 5))
+        search_var = tk.StringVar()
+        search_entry = ttk.Entry(dialog, textvariable=search_var, width=40)
+        search_entry.pack(pady=5)
+
+        # Результаты
+        result_frame = ttk.LabelFrame(dialog, text="Результаты", padding=10)
+        result_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Список результатов
+        columns = ('ID', 'Название', 'Тип', 'Дата')
+        result_tree = ttk.Treeview(result_frame, columns=columns, show='headings', height=8)
+
+        for col in columns:
+            result_tree.heading(col, text=col)
+            result_tree.column(col, width=100)
+
+        scrollbar = ttk.Scrollbar(result_frame, orient=tk.VERTICAL, command=result_tree.yview)
+        result_tree.configure(yscroll=scrollbar.set)
+
+        result_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def perform_search():
+            """Выполнить поиск"""
+            # Очищаем предыдущие результаты
+            for item in result_tree.get_children():
+                result_tree.delete(item)
+
+            search_text = search_var.get().strip()
+            if not search_text:
+                messagebox.showwarning("Предупреждение", "Введите текст для поиска")
+                return
+
+            # Получаем все симуляции и фильтруем
+            all_sims = self.storage_manager.get_recent_simulations(limit=1000)
+            results = []
+
+            for sim in all_sims:
+                if search_text.lower() in sim.get('name', '').lower():
+                    results.append(sim)
+                elif search_text.lower() in sim.get('equation_type', '').lower():
+                    results.append(sim)
+                elif search_text.lower() in ', '.join(sim.get('tags', [])).lower():
+                    results.append(sim)
+
+            if not results:
+                result_tree.insert('', tk.END, values=("", "Ничего не найдено", "", ""))
+                return
+
+            # Отображаем результаты
+            for sim in results[:50]:  # Ограничиваем 50 результатами
+                result_tree.insert('', tk.END, values=(
+                    sim['id'],
+                    sim['name'][:30],
+                    sim.get('equation_type', ''),
+                    sim['created_at'][:10]
+                ))
+
+        def load_selected():
+            """Загрузить выбранную симуляцию"""
+            selection = result_tree.selection()
+            if not selection:
+                return
+
+            item = result_tree.item(selection[0])
+            sim_id = item['values'][0]
+
+            if not sim_id:  # Пустая строка "Ничего не найдено"
+                return
+
+            sim_data = self.storage_manager.load_simulation_for_ui(str(sim_id))
+            if sim_data:
+                self._load_simulation_into_ui(sim_data)
+                dialog.destroy()
+                messagebox.showinfo("Успех", "Симуляция загружена")
+            else:
+                messagebox.showerror("Ошибка", "Не удалось загрузить симуляцию")
+
+        # Кнопки
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(pady=10)
+
+        ttk.Button(button_frame, text="🔍 Найти", command=perform_search).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="📥 Загрузить", command=load_selected).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="❌ Закрыть", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+
+        # Поиск по нажатию Enter
+        search_entry.bind('<Return>', lambda e: perform_search())
+
+    def show_import_export_dialog(self):
+        """Диалог импорта/экспорта (упрощенная версия)"""
+        if not self.storage_manager:
+            messagebox.showwarning("Предупреждение", "Хранилище недоступно")
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Импорт/Экспорт симуляций")
+        dialog.geometry("500x300")
+
+        notebook = ttk.Notebook(dialog)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Вкладка экспорта
+        export_frame = ttk.Frame(notebook)
+        notebook.add(export_frame, text="📤 Экспорт")
+
+        ttk.Label(export_frame, text="ID симуляции для экспорта:").pack(pady=(20, 5))
+
+        # Выбор из списка сохраненных
+        recent_sims = self.storage_manager.get_recent_simulations(limit=20)
+        sim_ids = [str(sim['id']) for sim in recent_sims]
+        sim_names = [sim['name'] for sim in recent_sims]
+
+        export_combo_var = tk.StringVar()
+        if sim_ids:
+            export_combo = ttk.Combobox(export_frame, textvariable=export_combo_var,
+                                        values=[f"{id}: {name}" for id, name in zip(sim_ids, sim_names)],
+                                        state="readonly", width=40)
+            export_combo.pack(pady=5)
+            if sim_ids:
+                export_combo.current(0)
+
+        def export_selected():
+            """Экспортировать выбранную симуляцию"""
+            if not sim_ids:
+                messagebox.showwarning("Предупреждение", "Нет сохраненных симуляций")
+                return
+
+            selection = export_combo_var.get()
+            if not selection:
+                messagebox.showerror("Ошибка", "Выберите симуляцию")
+                return
+
+            # Извлекаем ID
+            sim_id = selection.split(':')[0].strip()
+
+            # Диалог сохранения файла
+            from tkinter import filedialog
+            default_name = f"simulation_export_{sim_id}.json"
+
+            filepath = filedialog.asksaveasfilename(
+                title="Сохранить симуляцию",
+                defaultextension=".json",
+                initialfile=default_name,
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+            )
+
+            if not filepath:
+                return
+
+            # Экспорт
+            success = self.storage_manager.export_to_file(sim_id, filepath)
+            if success:
+                messagebox.showinfo("Успех", f"Симуляция экспортирована в:\n{filepath}")
+            else:
+                messagebox.showerror("Ошибка", "Не удалось экспортировать симуляцию")
+
+        ttk.Button(export_frame, text="📤 Экспорт в файл", command=export_selected).pack(pady=20)
+
+        # Вкладка импорта
+        import_frame = ttk.Frame(notebook)
+        notebook.add(import_frame, text="📥 Импорт")
+
+        ttk.Label(import_frame, text="Выберите файл симуляции для импорта:").pack(pady=(20, 5))
+
+        import_path_var = tk.StringVar()
+        ttk.Entry(import_frame, textvariable=import_path_var, width=40, state='readonly').pack(pady=5)
+
+        def browse_import_file():
+            """Выбрать файл для импорта"""
+            from tkinter import filedialog
+            filename = filedialog.askopenfilename(
+                title="Выберите файл симуляции",
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+            )
+            if filename:
+                import_path_var.set(filename)
+
+        ttk.Button(import_frame, text="📁 Выбрать файл", command=browse_import_file).pack(pady=5)
+
+        def import_simulation():
+            """Импортировать симуляцию"""
+            import_path = import_path_var.get().strip()
+            if not import_path:
+                messagebox.showerror("Ошибка", "Выберите файл для импорта")
+                return
+
+            try:
+                sim_id = self.storage_manager.import_from_file(import_path)
+                if sim_id:
+                    messagebox.showinfo("Успех", f"Симуляция импортирована (ID: {sim_id})")
+                    dialog.destroy()
+
+                    # Предложить загрузить импортированную симуляцию
+                    if messagebox.askyesno("Импорт", "Хотите загрузить импортированную симуляцию?"):
+                        sim_data = self.storage_manager.load_simulation_for_ui(sim_id)
+                        if sim_data:
+                            self._load_simulation_into_ui(sim_data)
+                else:
+                    messagebox.showerror("Ошибка", "Не удалось импортировать симуляцию")
+
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Ошибка импорта: {str(e)}")
+
+        ttk.Button(import_frame, text="📥 Импортировать", command=import_simulation).pack(pady=20)
+
+        # Кнопка закрытия
+        ttk.Button(dialog, text="Закрыть", command=dialog.destroy).pack(pady=10)
 
     def show_equation_params(self):
         """Показ параметров для выбранного уравнения"""
