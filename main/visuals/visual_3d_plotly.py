@@ -12,8 +12,8 @@ from wolframclient.language import wlexpr
 class Plotly3DModels:
     """3D визуализация с использованием Plotly (интерактивная, WebGL)"""
 
-    def __init__(self, wolfram_solver):
-        self.wolfram = wolfram_solver
+    def __init__(self):
+        # self.wolfram = wolfram_solver
         pio.templates.default = "plotly_dark"
 
     def solve_pendulum_equation(self, params, initial_conditions, t_range):
@@ -95,12 +95,10 @@ class Plotly3DModels:
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
-    def create_interactive_pendulum(self, params, initial_conditions, t_range):
+    def create_interactive_pendulum(self, solution,params):
         """
         Полная интерактивная визуализация маятника
         """
-        # Решаем уравнение
-        solution = self.solve_pendulum_equation(params, initial_conditions, t_range)
 
         if not solution['success']:
             print(f"Ошибка решения: {solution.get('error', 'Неизвестная ошибка')}")

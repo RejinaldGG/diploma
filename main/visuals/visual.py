@@ -15,8 +15,8 @@ class ODEVisualizer:
     def __init__(self, root, logic):
         self.root = root
         self.logic = logic
-        self.plotly_models = plotly_models;
-        self.setup_ui()  # Здесь создается control_frame
+        self.plotly_models = plotly_models()
+        self.setup_ui()
 
         # Инициализируем интегрированные визуализации
         self.viz_manager = IntegratedVisualizations(self.logic, self.plot_frame)
@@ -93,11 +93,9 @@ class ODEVisualizer:
             # Используем текущие начальные условия
             initial_conditions = [self.y0.get(), self.yp0.get()]
             t_range = (self.t_min.get(), self.t_max.get())
-
+            solution = self.logic.solve_equation('custom',params, initial_conditions, t_range)
             # Запускаем интерактивную визуализацию
-            success = self.plotly_models.create_interactive_pendulum(
-                params, initial_conditions, t_range
-            )
+            success = self.plotly_models.create_interactive_pendulum(solution, params)
 
             if not success:
                 # Fallback на matplotlib
